@@ -1,0 +1,19 @@
+<launch>
+    <!-- Argument to control if the GUI is launched -->
+    <arg name="gui" default="true" />
+    <param name="use_gui" value="$(arg gui)"/>
+
+    <!-- Load the URDF model file directly into the ROS Parameter Server -->
+    <!-- For .urdf files, we use the 'textfile' attribute -->
+    <param name="robot_description" textfile="$(find custom_hand_description)/urdf/linkerhand_l20_left.urdf" />
+
+    <!-- Start the joint_state_publisher_gui node -->
+    <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" />
+
+    <!-- Start the robot_state_publisher node -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+    <!-- Start RViz -->
+    <!-- The rviz config file will be saved after the first run -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find custom_hand_description)/launch/display_hand.rviz" required="true"/>
+</launch>

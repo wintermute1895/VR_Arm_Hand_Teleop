@@ -1,0 +1,10 @@
+<launch>
+    <param name="/use_sim_time" value="false"/>
+
+    <!-- !! 只加载机械臂的URDF !! -->
+    <param name="robot_description" command="$(find xacro)/xacro $(find rm_description)/urdf/RM75/rm_75.urdf" />
+
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+    <node name="rviz" pkg="rviz" type="rviz" />
+    <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" />
+</launch>

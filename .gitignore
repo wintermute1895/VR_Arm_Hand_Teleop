@@ -1,0 +1,25 @@
+# ROS Build files
+build/
+devel/
+install/
+logs/
+
+# IDE and editor files
+.vscode/
+*.swp
+*~
+.project
+.cproject
+.settings/
+
+# Python files
+__pycache__/
+*.pyc
+*.pyo
+
+# Other
+*.~
+*.bak
+*.orig
+hand_venv/
+linker_hand_sdk/

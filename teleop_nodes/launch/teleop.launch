@@ -1,0 +1,18 @@
+<!-- ~/ros_ws/src/teleop_nodes/launch/teleop.launch (TESTING MODE) -->
+<launch>
+
+    <!-- ======================= 步骤 1: 启动基础环境 ======================= -->
+    <include file="$(find my_robot_moveit_config)/launch/demo.launch" />
+
+    <!-- ======================= 步骤 2: 启动 Servo ======================= -->
+    <rosparam command="load" file="$(find my_robot_moveit_config)/config/rm_75_servo.yaml" />
+    <node name="servo_server" pkg="moveit_servo" type="servo_server" output="screen" />
+    
+    <!-- ======================= 步骤 3: 启动模拟遥操作节点 ======================= -->
+    <!-- 
+        我们现在启动模拟指令发布节点。
+        确保它的 type 属性与你的新文件名匹配。
+    -->
+    <node name="servo_speed_test" pkg="teleop_nodes" type="servo_speed_test.py" output="screen" />
+
+</launch>

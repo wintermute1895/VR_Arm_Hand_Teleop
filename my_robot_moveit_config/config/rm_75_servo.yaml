@@ -1,0 +1,70 @@
+# ================================================================================= #
+#       FINAL "FULL PARAMETER" MoveIt Servo Configuration for ROS Noetic
+# ================================================================================= #
+# 
+# 解决了 "Missing ros parameters" 错误，提供了所有必需的参数。
+#
+
+servo_server:
+  # --- 必需的核心参数 ---
+  move_group_name: "arm"
+  planning_frame: "base_link"
+  ee_frame_name: "hand_base_link"
+  robot_link_command_frame: "base_link"
+  
+  # --- 必需的输入/输出话题参数 ---
+  command_in_type: "speed_units"
+  cartesian_command_in_topic: "/servo_server/delta_twist_cmds"
+  joint_command_in_topic: "/servo_server/delta_joint_cmds"
+  
+  # 对于 demo.launch 的 fake_controller_manager
+  command_out_type: "trajectory_msgs/JointTrajectory"
+  command_out_topic: "/fake_arm_controller/joint_trajectory"
+  
+  # 必需的伺服参数
+  publish_period: 0.02
+  low_pass_filter_coeff: 2.0
+  incoming_command_timeout: 0.1
+  num_outgoing_halt_msgs_to_publish: 3
+  
+  # 必需的速度缩放参数
+  scale:
+    linear: 1.0
+    rotational: 1.0
+    joint: 1.0
+  override_velocity_scaling_factor: true
+
+  # 必需的速度和奇异点限制
+  max_linear_velocity: 0.5
+  max_rotational_velocity: 1.0
+  hard_stop_singularity_threshold: 30.0
+  lower_singularity_threshold: 17.0
+  singularity_threshold: 15.0
+
+  # 必需的关节限制和状态话题
+  joint_limit_margin: 0.1
+  joint_topic: "/joint_states"
+
+  # 必需的碰撞检测配置
+  check_collisions: true
+  collision_check_rate: 10.0
+  collision_check_type: "threshold_distance"
+  self_collision_proximity_threshold: 10.0
+  scene_collision_proximity_threshold: 10.0
+  
+  # 必需的、但通常不用的碰撞参数 (设为安全默认值)
+  collision_distance_safety_factor: 1.0 # 必须 >= 1.0
+  min_allowable_collision_distance: 0.001
+
+  # 必需的其他参数
+  use_gazebo: false
+  publish_joint_positions: true
+  publish_joint_velocities: true
+  publish_joint_accelerations: false # 通常不发布加速度
+  
+  # 必需的状态和警告话题
+  status_topic: "/servo_server/status"
+  warning_topic: "/servo_server/warning" # 即使废弃，也需要存在
+  
+  # 新参数，设为默认值
+  low_latency_mode: false

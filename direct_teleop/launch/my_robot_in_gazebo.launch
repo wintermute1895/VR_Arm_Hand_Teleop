@@ -1,0 +1,51 @@
+<launch>
+
+    <!-- =================================================================================== -->
+    <!-- STEP 1: 启动Gazebo仿真世界 -->
+    <!-- 关键点: 包含睿尔曼官方提供的 world.launch 文件。 -->
+    <!-- 这能确保物理引擎参数、光照等环境设置是最适合该机器人的。 -->
+    <!-- =================================================================================== -->
+    <include file="$(find rm_gazebo)/launch/RM75/arm_world.launch" />
+
+    <!-- =================================================================================== -->
+    <!-- STEP 2: 加载并生成你的组合机器人模型 (机械臂 + 灵巧手) -->
+    <!-- =================================================================================== -->
+    <!-- (a) 使用 xacro 解析你的顶层模型文件，并加载到 ROS 参数服务器 -->
+    <!--     文件名应为 robot.urdf.xacro 或 rm_75_with_linkerhand.urdf.xacro, 请确保与您的文件名一致 -->
+    <param name="robot_description" command="$(find xacro)/xacro '$(find rm_hand_description)/urdf/robot.urdf.xacro'" />
+
+    <!-- (b) 在Gazebo中生成机器人模型 -->
+    <!--     -urdf: 指定模型是URDF格式 -->
+    <!--     -model: 在Gazebo中为模型命名 -->
+    <!--     -z 0.1: 将模型在Z轴上稍微抬高，防止初始时与地面穿模 -->
+    <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model" args="-param robot_description -urdf -model rm_75_with_linkerhand -z 0.1" />
+
+    <!-- =================================================================================== -->
+    <!-- STEP 3: 加载并启动 ROS 控制器 (ros_control) -->
+    <!-- =================================================================================== -->
+    <!-- (a) 加载控制器配置文件 (YAML) -->
+    <rosparam file="$(find direct_teleop)/config/arm_gazebo_controllers.yaml" command="load"/>
+    
+    <!-- (b) 启动控制器管理器(spawner)，它会启动YAML文件中定义的所有控制器 -->
+    <!--     'args' 列出了所有要启动的控制器名称 -->
+    <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false"
+          output="screen" ns="/arm" args="joint_state_controller
+                                          joint1_position_controller
+                                          joint2_position_controller
+                                          joint3_position_controller
+                                          joint4_position_controller
+                                          joint5_position_controller
+                                          joint6_position_controller
+                                          joint7_position_controller" />
+
+    <!-- =================================================================================== -->
+    <!-- STEP 4: 启动机器人状态发布器 -->
+    <!-- 发布机器人各连杆的TF坐标变换，供RViz等工具使用 -->
+    <!-- =================================================================================== -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"
+        respawn="false" output="screen">
+        <!-- 由于控制器在 /arm 命名空间下，joint_states 话题也在此空间下，所以需要重映射 -->
+        <remap from="/joint_states" to="/arm/joint_states" />
+    </node>
+
+</launch>

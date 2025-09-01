@@ -1,0 +1,11 @@
+<!-- master_visualizer.launch (最终版) -->
+<launch>
+    <param name="/use_sim_time" value="false"/>
+    <param name="robot_description" command="$(find xacro)/xacro $(find rm_hand_description)/urdf/robot.urdf.xacro" />
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+    
+    <!-- !! 关键修改：用我们自己的合并节点替换掉 mux !! -->
+    <node name="joint_state_combiner" pkg="direct_teleop" type="joint_state_combiner.py" output="screen" />
+    
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find direct_teleop)/rviz/config.rviz" required="true" />
+</launch>

@@ -1,0 +1,43 @@
+<launch>
+    <!-- 
+      ====================================================================
+      |                  ARGUMENTS & PARAMETERS                          |
+      ====================================================================
+      Arguments are variables for the launch file.
+      Parameters are values that get uploaded to the ROS Parameter Server.
+    -->
+
+    <!-- This argument controls whether the joint state publisher GUI is launched -->
+    <arg name="gui" default="true" />
+    <param name="use_gui" value="$(arg gui)"/>
+
+
+    <!-- Load the URDF file into the 'robot_description' parameter on the ROS Parameter Server.
+         Since this is a .urdf file, we use the 'textfile' attribute to load it directly. -->
+    <param name="robot_description" textfile="$(find custom_hand_description)/urdf/linkerhand_l20_left.urdf" />
+
+
+    <!-- 
+      ====================================================================
+      |                         NODES                                    |
+      ====================================================================
+      Each <node> tag launches an executable program (a ROS Node).
+    -->
+
+    <!-- The joint_state_publisher_gui node -->
+    <!-- It creates a window with sliders for each non-fixed joint in the robot model.
+         When you move a slider, it publishes the joint states to the /joint_states topic. -->
+    <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" />
+
+    <!-- The robot_state_publisher node -->
+    <!-- It subscribes to the /joint_states topic and uses the robot_description parameter
+         to calculate and publish the TF (transform) tree of the robot. This is what allows
+         RViz to know where each link of the hand is in 3D space. -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+    <!-- RViz -->
+    <!-- This node starts the RViz visualization tool. The '-d' argument tells it to load
+         a specific configuration file. We will create this file on the first run. -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find custom_hand_description)/launch/display_hand.rviz" required="true"/>
+
+</launch>

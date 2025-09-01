@@ -1,0 +1,43 @@
+<launch>
+    <param name="/use_sim_time" value="false"/>
+    <!-- 
+      这个启动文件专为在RViz中进行纯运动学可视化而设计。
+      它不启动Gazebo或MoveIt!，因此非常轻量级和稳定。
+      非常适合用来调试URDF模型和开发直接控制节点。
+    -->
+
+    <!-- =================================================================================== -->
+    <!-- STEP 1: 定义参数，方便修改 -->
+    <!-- =================================================================================== -->
+    
+    <!-- 参数: 指定要加载的机器人模型文件 -->
+    <!-- 默认指向您的组合模型，请确保文件名 'robot.urdf.xacro' 是正确的 -->
+    <arg name="model" default="$(find rm_hand_description)/urdf/robot.urdf.xacro"/>
+
+    <!-- 参数: 指定RViz的配置文件 -->
+    <!-- 第一次运行时，RViz会是空的。您需要手动添加组件并保存配置到这个路径 -->
+    <!-- 建议先创建一个空的rviz文件夹：mkdir -p $(find direct_teleop)/rviz -->
+    <arg name="rvizconfig" default="$(find direct_teleop)/rviz/config.rviz" />
+
+
+    <!-- =================================================================================== -->
+    <!-- STEP 2: 加载机器人模型并启动核心节点 -->
+    <!-- =================================================================================== -->
+
+    <!-- (a) 将URDF/XACRO模型文件加载到ROS参数服务器 -->
+    <param name="robot_description" command="$(find xacro)/xacro $(arg model)" />
+
+    <!-- (b) 启动 robot_state_publisher 节点 -->
+    <!-- 它会监听 /joint_states 话题，并根据 robot_description 发布所有连杆的TF坐标变换 -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+    <!-- (c) 启动 RViz 可视化工具 -->
+    <!-- -d 参数会加载指定的配置文件 -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(arg rvizconfig)" required="true" />
+    
+    <!-- (d) 启动一个带GUI的关节状态发布器 -->
+    <!-- 这个节点会创建一个带有关节滑块的窗口，让您可以手动控制模型姿态 -->
+    <!-- 它是/joint_states话题的发布源，非常适合在没有PICO数据时进行测试 -->
+   <!--<node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" />-->
+
+</launch>

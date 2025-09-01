@@ -1,0 +1,35 @@
+<launch>
+    <!-- 参数，方便修改 -->
+    <arg name="arm_ip" default="192.168.1.18"/>
+    <arg name="arm_type" default="65"/>
+    
+    <!-- 
+      STEP 1: 加载正确的机器人URDF模型到参数服务器 
+      这是最关键的一步。roslaunch会确保 $(find rm_description) 能被正确解析。
+    -->
+    <param name="robot_description" command="$(find xacro)/xacro $(find rm_description)/urdf/RM$(arg arm_type)/rm_$(arg arm_type).urdf" />
+
+    <!-- 
+      STEP 2: 启动底层驱动 (rm_driver)
+      它会连接硬件并开始发布 /joint_states 话题。
+    -->
+    <include file="$(find rm_driver)/launch/rm_$(arg arm_type)_driver.launch">
+        <arg name="Arm_IP" value="$(arg arm_ip)"/>
+        <arg name="Arm_Dof" value="6"/> <!-- 明确指定6自由度 -->
+    </include>
+
+    <!-- 
+      STEP 3: 启动ros_control控制器
+      它会创建 FollowJointTrajectory Action Server，这是我们控制器的目标接口。
+    -->
+    <include file="$(find rm_control)/launch/rm_$(arg arm_type)_control.launch">
+        <arg name="Arm_Dof" value="6"/> <!-- 明确指定6自由度 -->
+    </include>
+
+    <!-- 
+      STEP 4: 启动robot_state_publisher
+      它订阅 /joint_states，发布 /tf。
+    -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="true" />
+
+</launch>

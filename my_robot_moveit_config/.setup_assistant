@@ -1,0 +1,11 @@
+moveit_setup_assistant_config:
+  URDF:
+    package: rm_hand_description
+    relative_path: urdf/robot.urdf.xacro
+    xacro_args: ""
+  SRDF:
+    relative_path: config/rm_75_with_linkerhand.srdf
+  CONFIG:
+    author_name: wintermute
+    author_email: 13364149979@163.com
+    generated_timestamp: 1754559334

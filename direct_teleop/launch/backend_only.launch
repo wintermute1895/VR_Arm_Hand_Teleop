@@ -1,0 +1,14 @@
+<!-- direct_teleop/launch/backend_only.launch -->
+<launch>
+    <!-- 强制使用真实时间 -->
+    <param name="/use_sim_time" value="false"/>
+
+    <!-- 加载您的组合机器人模型 -->
+    <param name="robot_description" command="$(find xacro)/xacro $(find rm_hand_description)/urdf/robot.urdf.xacro" />
+
+    <!-- 启动 robot_state_publisher -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+    
+    <!-- 启动手动的GUI滑块，用于测试 -->
+    <!-- <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" /> -->
+</launch>

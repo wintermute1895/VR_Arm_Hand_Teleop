@@ -1,0 +1,16 @@
+<launch>
+
+    <!-- 1. 将我们融合后的XACRO文件解析成URDF，并加载到ROS参数服务器上。-->
+    <param name="robot_description" command="$(find xacro)/xacro $(find rm_hand_description)/urdf/robot.urdf.xacro" />
+
+    <!-- 2. 启动一个带GUI的节点，发布所有关节的状态。-->
+    <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" />
+
+    <!-- 3. 启动核心的robot_state_publisher节点，发布TF变换。-->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+
+    <!-- 4. 启动RViz，我们的3D可视化舞台。 -->
+    <!-- 第一次启动时，可以先不加args参数，手动配置后再保存。 -->
+    <node name="rviz" pkg="rviz" type="rviz" />
+
+</launch>

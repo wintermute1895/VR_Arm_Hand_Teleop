@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<robot name="rm_75_with_linkerhand" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- 
+    ======================================================================
+    STEP 1: 包含睿尔曼RM75机械臂的【纯净URDF】模型
+    ======================================================================
+    -->
+    <xacro:include filename="$(find rm_description)/urdf/RM75/rm_75.urdf" /> 
+
+    <!-- 
+    ======================================================================
+    STEP 2: 包含你手动修改过的、带前缀的灵巧手模型
+    ======================================================================
+    -->
+    <xacro:include filename="$(find rm_hand_description)/urdf/linkerhand_l20_left.urdf.xacro" />
+
+    <!-- 
+    ======================================================================
+    STEP 3: “焊接”
+    ======================================================================
+    -->
+    <joint name="arm_to_hand_mount_joint" type="fixed">
+        <parent link="Link7"/> 
+        <child link="hand_base_link"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/> 
+    </joint>
+
+</robot> <!-- 就是这个标签！请确保它一定在文件的最后 -->

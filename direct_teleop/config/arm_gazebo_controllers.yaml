@@ -1,0 +1,37 @@
+# direct_teleop/config/arm_gazebo_controllers.yaml
+# (基于睿尔曼官方文件修改，确保了兼容性)
+
+arm:
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 50  
+  
+  # 为每个关节加载位置控制器
+  joint1_position_controller:
+    type: position_controllers/JointPositionController
+    joint: joint1
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  joint2_position_controller:
+    type: position_controllers/JointPositionController
+    joint: joint2
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  joint3_position_controller:
+    type: position_controllers/JointPositionController
+    joint: joint3
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  joint4_position_controller:
+    type: position_controllers/JointPositionController
+    joint: joint4
+    pid: {p: 50.0, i: 0.01, d: 5.0} # 稍微降低了远端关节的P值，可能更稳定
+  joint5_position_controller:
+    type: position_controllers/JointPositionController
+    joint: joint5
+    pid: {p: 30.0, i: 0.01, d: 1.0}
+  joint6_position_controller:
+    type: position_controllers/JointPositionController
+    joint: joint6
+    pid: {p: 10.0, i: 0.01, d: 1.0}
+  joint7_position_controller:
+    type: position_controllers/JointPositionController
+    joint: joint7
+    pid: {p: 5.0, i: 0.01, d: 1.0}
