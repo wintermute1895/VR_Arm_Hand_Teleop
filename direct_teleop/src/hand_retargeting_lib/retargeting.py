@@ -58,7 +58,7 @@ class HandOptimizer:
             options={
                 'maxiter': self.config.MAX_ITER,
                 'ftol': self.config.TOLERANCE,
-                'eps': 1e-3
+                'eps': 1e-2
             }
         )
 

@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 from sensor_msgs.msg import JointState
 from direct_teleop.msg import PicoHand, LossInfo
+import threading
 
 # 导入适配层和算法
 from hand_retargeting_lib.L10 import config_l10 as config
@@ -28,20 +29,15 @@ class HandRetargetingAlgorithmNode:
             self.config = config
             self.calibration_state = 0
             self.robot_model = None
-            self.optimizer = None
+            self.lock = threading.Lock()
             self.frame_count = 0
             self.latest_pico_array = None
             self.last_successful_q_vec = None
             self.latest_pico_timestamp = None # 新增：用于延迟计算
-            
-            log_filename = f"teleop_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            self.log_file = open(log_filename, 'w')
-            rospy.loginfo(f"Detailed log will be saved to: {log_filename}")
 
             self.hand_joint_pub = rospy.Publisher('/hand_retargeting/target_joint_states', JointState, queue_size=1)
             self.loss_pub = rospy.Publisher('/debug/loss_info', LossInfo, queue_size=1)
             rospy.Subscriber('/pico/hand/keypoints', PicoHand, self.pico_data_buffer_callback, queue_size=1)
-            rospy.on_shutdown(self.shutdown_hook)
             rospy.loginfo(">>>> Node initialization COMPLETE. <<<<")
 
         except Exception as e:
@@ -57,11 +53,12 @@ class HandRetargetingAlgorithmNode:
         return hand_dict
 
     def pico_data_buffer_callback(self, msg):
-        self.latest_pico_array = np.array([[p.x, p.y, p.z] for p in msg.keypoints])
-        self.latest_pico_timestamp = msg.header.stamp # 记录PICO数据的时间戳
+        with self.lock:
+            self.latest_pico_array = np.array([[p.x, p.y, p.z] for p in msg.keypoints])
+            self.latest_pico_timestamp = msg.header.stamp # 记录PICO数据的时间戳
 
     def run(self):
-        rate = rospy.Rate(15)
+        rate = rospy.Rate(50)
         
         rospy.loginfo("\n" + "="*60)
         rospy.loginfo("      PICO HAND RETARGETING CALIBRATION REQUIRED")
@@ -79,10 +76,10 @@ class HandRetargetingAlgorithmNode:
                     if sys.stdin.read(1).lower() == 'c' and self.calibration_state == 0:
                         self.calibration_state = 1
                         rospy.loginfo(">>>> 'c' key pressed! Attempting to calibrate... <<<<")
-                
-                if self.latest_pico_array is None:
-                    rate.sleep(); continue
-                current_pico_array = self.latest_pico_array
+                with self.lock:
+                    if self.latest_pico_array is None:
+                        rate.sleep(); continue
+                    current_pico_array = self.latest_pico_array
 
                 if self.calibration_state == 1:
                     try:
@@ -91,7 +88,6 @@ class HandRetargetingAlgorithmNode:
                         self.robot_model = RobotHandModel(self.config, q0_dict, w0_dict)
                         self.last_successful_q_vec = angles_dict_to_vector(q0_dict, self.config)
                         self.robot_model.calibrate(w0_dict)
-                        self.optimizer = HandOptimizer(self.robot_model, self.config)
                         self.calibration_state = 2
                         rospy.loginfo(">>>> CALIBRATION SUCCESSFUL! <<<<")
                     except Exception as e_calib:
@@ -105,9 +101,11 @@ class HandRetargetingAlgorithmNode:
                         w_dict_current = self._pico_array_to_hand_dict(current_pico_array)
                         if w_dict_current is None:
                             rate.sleep(); continue
+                        
+                        optimizer_this_frame = HandOptimizer(self.robot_model, self.config)
 
                         t_before_opt = time.time()
-                        final_q_dict, loss_info = self.optimizer.optimize_q(w_dict_current, self.last_successful_q_vec)
+                        final_q_dict, loss_info = optimizer_this_frame.optimize_q(w_dict_current, self.last_successful_q_vec)
                         t_after_opt = time.time()
 
                         self.robot_model.update_robot_hand_state(final_q_dict) # 传入None，因为不再需要内部状态
@@ -116,8 +114,6 @@ class HandRetargetingAlgorithmNode:
                             self.last_successful_q_vec = angles_dict_to_vector(final_q_dict, self.config)                            
                             self.publish_joint_states(final_q_dict)
                             self.publish_loss_info(loss_info)
-                            if self.frame_count % 10 == 0:
-                                self.save_debug_data_to_file(loss_info.get('total', -1.0))
                         else:
                             rospy.logwarn_throttle(1.0, f"Optimization FAILED: {loss_info.get('message', 'Unknown reason')}")
                         
@@ -160,37 +156,6 @@ class HandRetargetingAlgorithmNode:
         loss_msg.loss_couple = loss_info_dict.get('couple', 0.0) 
         loss_msg.loss_smooth = loss_info_dict.get('smooth', 0.0)
         self.loss_pub.publish(loss_msg)
-
-    def save_debug_data_to_file(self, loss_value):
-        np.set_printoptions(precision=3, suppress=True)
-        def write_line(text=""): self.log_file.write(text + '\n')
-        write_line(f"\n{'='*25} FRAME {self.frame_count} ({time.time():.2f}) {'='*25}")
-        write_line("\n--- 1. Robot Joint Angles (q_t) [Radians] ---")
-        for finger, angles in self.robot_model.q.items():
-            if finger in self.config.FINGER_NAMES:
-                write_line(f"  {finger.capitalize():<7}: {np.array(angles)}")
-        write_line("\n--- 2. Human Keypoints Dictionary (w_dict) ---")
-        for finger, points in self.robot_model.w.items():
-            if finger in self.config.ALL_FINGER_NAMES or finger == 'wrist':
-                write_line(f"  {finger.capitalize():<7}: \n{points}")
-        write_line("\n--- 3. Reconstructed Target Keypoints (v) ---")
-        for finger, points in self.robot_model.v.items():
-            if finger in self.config.FINGER_NAMES:
-                write_line(f"  {finger.capitalize():<7}: \n{points}")
-        write_line("\n--- 4. Robot Forward Kinematics (FK) ---")
-        fk_points = self.robot_model.fk.calculate_fk_all_keypoints(self.robot_model.q)
-        for finger, points in fk_points.items():
-            if finger in self.config.FINGER_NAMES:
-                write_line(f"  {finger.capitalize():<7}: \n{points}")
-        write_line("\n--- 9. Total Loss Function Value ---")
-        write_line(f"  Loss: {loss_value:.4f}")
-        write_line("\n" + "="*68 + "\n")
-        self.log_file.flush()
-
-    def shutdown_hook(self):
-        if hasattr(self, 'log_file') and not self.log_file.closed:
-            self.log_file.close()
-            rospy.loginfo("Debug log file closed.")
 
 if __name__ == '__main__':
     try:
