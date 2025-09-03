@@ -1,27 +1,29 @@
 # retargeting.py
-# (为LinkerHand L10模型优化，并包含完整的L_couple成本项)
+# (最终修正版：实现了无状态优化器，由上层节点管理状态)
 
 import numpy as np
 from scipy.optimize import minimize, Bounds
+import time
+import traceback
 
-# --- 关键：严格按照您的项目结构进行导入 ---
-from hand_retargeting_lib.L10.utils_l10 import vector_to_angles_dict, angles_dict_to_vector, sigmoid
-import hand_retargeting_lib.L10.config_l10 as config
+# 导入通用的工具函数
+from hand_retargeting_lib.L10.utils_l10 import vector_to_angles_dict, angles_dict_to_vector
 
 class HandOptimizer:
-    def __init__(self, robot_hand_model):
+    def __init__(self, robot_hand_model, config_module):
         """
         构造函数。
-        :param robot_hand_model: 一个已初始化的 RobotHandModel_L10 对象。
+        :param robot_hand_model: 一个已初始化的 RobotHandModel 对象。
+        :param config_module: 对应的配置模块 (e.g., config_l10)。
         """
         self.model = robot_hand_model
-        # 注意: 即使外部传入了config, 内部逻辑也强依赖导入的L10 config
-        self.config = config 
+        self.config = config_module
         self.bounds = self._create_bounds()
-        self.q_prev_vec = self._create_initial_vector()
+        # 注意：不再有 self.q_prev_vec 实例变量
+        self.debug_counter = 0
 
     def _create_bounds(self):
-        """根据L10的config为独立关节创建边界。"""
+        """根据传入的config为独立关节创建边界。"""
         b = []
         for finger in self.config.FINGER_NAMES:
             finger_info = self.config.JOINT_INFO.get(finger, {})
@@ -35,95 +37,105 @@ class HandOptimizer:
         high = [bound[1] for bound in b]
         return Bounds(low, high)
 
-    def _create_initial_vector(self):
-        """根据L10的config创建零位姿的独立关节向量。"""
-        q0_dict = {}
-        for finger in self.config.FINGER_NAMES:
-            num_independent_joints = 0
-            finger_info = self.config.JOINT_INFO.get(finger, {})
-            mimic_info = finger_info.get('mimic', {})
-            for name in finger_info.get('names', []):
-                if name not in mimic_info:
-                    num_independent_joints += 1
-            q0_dict[finger] = [0.0] * num_independent_joints
-        return angles_dict_to_vector(q0_dict, self.config)
-
-    def optimize_q(self, w_lhs):
-        """主优化函数。"""
-        self.model.compute_v_target(w_lhs)
+    def optimize_q(self, w_dict, q_prev_vec):
+        """
+        主优化函数。它现在是一个无状态的计算函数。
+        :param w_dict: 以手指为键的人手关键点字典。
+        :param q_prev_vec: 上一帧的最终优化结果，用作本帧的初值和平滑目标。
+        """
+        # 1. 更新模型内部的人手状态 (v, delta, omega等)
+        self.model.update_human_hand_state(w_dict)
+        
+        # 2. 运行优化器
+        self.debug_counter += 1
+        
         result = minimize(
-            fun=self._loss_function,
-            x0=self.q_prev_vec,
+            # 使用lambda函数将 q_prev_vec 捕获到损失函数的调用中
+            fun=lambda q_vec: self._loss_function(q_vec, q_prev_vec),
+            x0=q_prev_vec, # 使用传入的 q_prev_vec 作为初值
             method='SLSQP',
             bounds=self.bounds,
             options={
                 'maxiter': self.config.MAX_ITER,
                 'ftol': self.config.TOLERANCE,
-                'eps': 1e-4
+                'eps': 1e-3
             }
         )
 
+        # 3. 处理并返回结果
         if not result.success:
-            final_q_dict = vector_to_angles_dict(self.q_prev_vec, self.config)
-            return final_q_dict, -1.0
+            # 如果失败，返回基于上一帧结果计算出的字典
+            final_q_dict = vector_to_angles_dict(q_prev_vec, self.config)
+            return final_q_dict, {"status": "failed", "message": result.message}
 
-        self.q_prev_vec = result.x
+        # 如果成功，用新的优化结果计算字典
         final_q_dict = vector_to_angles_dict(result.x, self.config)
-        return final_q_dict, result.fun
 
-    def _loss_function(self, q_vec):
-        """
-        计算给定关节角度下的总损失，包含姿态对齐、指间耦合和平滑三项。
-        """
-        # --- 1. 数据准备 ---
-        q_dict = vector_to_angles_dict(q_vec, self.config)
-        fk_keypoints = self.model.fk.calculate_fk_all_keypoints(q_dict)
-        v_target = self.model.v
-
-        # --- 2. 姿态对齐成本 (L_align) ---
-        fk_q0 = self.model._get_initial_fk_keypoints()
-        wrist_pos = fk_q0[self.config.KEYPOINT_MAP['wrist']]
-        middle_mcp_pos = fk_q0[self.config.KEYPOINT_MAP['middle_mcp']]
-        palm_scale = np.linalg.norm(middle_mcp_pos - wrist_pos)
-        if palm_scale < 1e-6: palm_scale = 1.0
+        # 重新计算一次损失函数以获取详细的分项损失
+        final_loss_info = self._loss_function(result.x, q_prev_vec, return_dict=True)
+        final_loss_info["status"] = "success"
         
-        error_vec = (fk_keypoints - v_target) / palm_scale
-        loss_align = np.sum(error_vec ** 2)
+        return final_q_dict, final_loss_info
 
-        # --- 3. 指间耦合成本 (L_couple) ---
-        loss_couple = 0.0
-        thumb_tip_idx = self.config.KEYPOINT_MAP['thumb_tip']
-        human_thumb_tip_pos = v_target[thumb_tip_idx]
-        robot_thumb_tip_pos = fk_keypoints[thumb_tip_idx]
-        
-        # L10的config中pinky替代了little
-        coupling_fingers = ['index', 'middle', 'ring', 'pinky']
-        for finger in coupling_fingers:
-            finger_tip_idx = self.config.KEYPOINT_MAP[f'{finger}_tip']
-            human_finger_tip_pos = v_target[finger_tip_idx]
-            robot_finger_tip_pos = fk_keypoints[finger_tip_idx]
+    def _loss_function(self, q_vec, q_prev_vec, return_dict=False):
+        """
+        计算总损失。它现在是一个纯函数，所有依赖都通过参数传入。
+        """
+        try:
+            q_dict = vector_to_angles_dict(q_vec, self.config)
+            robot_keypoints = self.model.fk.calculate_fk_all_keypoints(q_dict)
             
-            human_relative_vec = human_finger_tip_pos - human_thumb_tip_pos
-            robot_relative_vec = robot_finger_tip_pos - robot_thumb_tip_pos
+            # --- 1. 姿态对齐损失 (loss_conformal) ---
+            loss_conformal = 0.0
+            points_compared = 0
+            for finger in self.config.FINGER_NAMES:
+                if finger in self.model.v and finger in robot_keypoints:
+                    target_pts = self.model.v[finger]
+                    robot_pts = robot_keypoints[finger]
+                    num_pts = min(len(target_pts), len(robot_pts))
+                    if num_pts > 0:
+                        error = target_pts[:num_pts] - robot_pts[:num_pts]
+                        loss_conformal += np.sum(error**2)
+                        points_compared += num_pts
+            if points_compared > 0:
+                loss_conformal /= points_compared
             
-            rho_min = self.config.COUPLING_PARAMS['rho_min']
-            rho_max = self.config.COUPLING_PARAMS['rho_max']
-            sigma = self.config.COUPLING_PARAMS['sigma']
-            tau = self.config.COUPLING_PARAMS['tau']
-            
-            human_dist = np.linalg.norm(human_relative_vec)
-            rho_t = 1.0 - np.clip((human_dist - rho_min) / (rho_max - rho_min), 0, 1)
-            beta_t = sigmoid(rho_t, k=sigma, c=tau)
-            
-            finger_couple_loss = beta_t * np.sum((human_relative_vec - robot_relative_vec)**2)
-            loss_couple += finger_couple_loss
+            # --- 2. 指间耦合损失 (loss_contact) ---
+            loss_contact = 0.0
+            robot_tips = {finger: pts[-1] for finger, pts in robot_keypoints.items() if len(pts) > 0}
+            if 'thumb' in robot_tips:
+                g_thumb_tip = robot_tips['thumb']
+                for finger, finger_tip in robot_tips.items():
+                    if finger != 'thumb' and finger in self.model.delta:
+                        g_i = finger_tip - g_thumb_tip
+                        delta_i = self.model.delta[finger]
+                        omega_i = self.model.omega.get(finger, 0.0)
+                        loss_contact += omega_i * np.sum((delta_i - g_i)**2)
 
-        # --- 4. 时间平滑成本 (L_smooth) ---
-        loss_smooth = np.sum((q_vec - self.q_prev_vec)**2)
+            # --- 3. 时间平滑损失 (loss_smooth) ---
+            loss_smooth = np.sum((q_vec - q_prev_vec)**2)
 
-        # --- 5. 计算总损失 ---
-        total_loss = (self.config.LAMBDA_ALIGNMENT * loss_align +
-                      self.config.LAMBDA_COUPLE * loss_couple +
-                      self.config.LAMBDA_SMOOTHNESS * loss_smooth)
-                      
-        return total_loss
+            # --- 4. 计算加权总损失 ---
+            weighted_align = self.config.LAMBDA_ALIGNMENT * loss_conformal
+            weighted_contact = self.config.LAMBDA_COORDINATION * loss_contact
+            weighted_smooth = self.config.LAMBDA_SMOOTHNESS * loss_smooth
+            total_loss = weighted_align + weighted_contact + weighted_smooth
+            
+            # --- 调试信息 ---
+            if self.debug_counter % 10 == 0:
+                print(f"[LOSS] align={loss_conformal:.4f}, contact={loss_contact:.4f}, smooth={loss_smooth:.4f} => TOTAL={total_loss:.4f}")
+
+            if np.isnan(total_loss): return 1e10
+            
+            if return_dict:
+                return {
+                    "total": total_loss, "align": weighted_align,
+                    "couple": weighted_contact, "smooth": weighted_smooth
+                }
+            else:
+                return total_loss
+
+        except Exception as e:
+            print(f"[RETARGETING ERROR] in _loss_function: {e}")
+            traceback.print_exc()
+            return 1e10

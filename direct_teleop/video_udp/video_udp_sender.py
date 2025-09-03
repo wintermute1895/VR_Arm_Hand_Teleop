@@ -4,10 +4,10 @@ import numpy as np
 import time
 
 # --- 配置 ---
-PICO_IP = "192.168.110.153"  # !! 重要：这里需要填入PICO设备的IP地址 !!
+PICO_IP = "192.168.1.105"  # !! 重要：这里需要填入PICO设备的IP地址 !!
 PORT = 9998                  # 使用一个新端口，避免和手部数据(9999)冲突
 VIDEO_DEVICE = 0             # 摄像头的设备号, 通常是0
-JPEG_QUALITY = 50         # 图像压缩质量 (0-100)，值越低延迟越小
+JPEG_QUALITY = 40         # 图像压缩质量 (0-100)，值越低延迟越小
 
 def main():
     # 初始化UDP Socket

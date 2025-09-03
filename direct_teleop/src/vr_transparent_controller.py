@@ -8,6 +8,7 @@ from geometry_msgs.msg import Pose, PoseStamped
 from sensor_msgs.msg import JointState
 from rm_msgs.msg import JointPos
 from trac_ik_python.trac_ik import IK
+from std_msgs.msg import Bool # 导入布尔消息类型
 from tf.transformations import quaternion_matrix, quaternion_from_matrix
 
 # ... (辅助函数 pose_to_matrix 和 matrix_to_pose 保持不变) ...
@@ -37,6 +38,7 @@ class VrDirectTransparentController:
         self.ik_timeout = 0.005
 
         # --- 2. 安全与平滑参数 ---
+        # !! 注意：您之前的日志显示速度已经调低，这里保持低速 !!
         self.max_joint_velocity = 0.2
         self.max_joint_acceleration = 1.0
 
@@ -50,14 +52,11 @@ class VrDirectTransparentController:
 
         # --- 4. 初始化IK ---
         try:
-            rospy.loginfo("Waiting for '/robot_description' parameter...")
             self.urdf_string = rospy.get_param("/robot_description")
             self.ik_solver = IK(self.base_link, self.end_effector_link, urdf_string=self.urdf_string, timeout=self.ik_timeout)
             self.joint_names = self.ik_solver.joint_names
-            if len(self.joint_names) != 6:
-                rospy.logwarn(f"IK solver initialized for {len(self.joint_names)} joints, but expected 6 for RM-65.")
         except Exception as e:
-            rospy.logerr(f"Failed to initialize: {e}")
+            rospy.logerr(f"Failed to initialize IK solver: {e}")
             sys.exit(1)
 
         # --- 5. 状态变量 ---
@@ -70,6 +69,10 @@ class VrDirectTransparentController:
         self.command_pub = rospy.Publisher('/rm_driver/JointPos', JointPos, queue_size=1)
         rospy.Subscriber('/pico/hand/pose', PoseStamped, self.pose_callback, queue_size=1)
         rospy.Subscriber('/joint_states', JointState, self.joint_states_callback, queue_size=1)
+        
+        # !! 新增：为Debug Aggregator创建发布器 !!
+        self.ik_status_pub = rospy.Publisher('/debug/ik_status', Bool, queue_size=1)
+        self.target_pose_pub = rospy.Publisher('/teleop/target_pose', PoseStamped, queue_size=1) # 也发布变换后的目标，方便调试
         
         rospy.loginfo("VR Direct Transparent Controller is ready.")
 
@@ -98,21 +101,31 @@ class VrDirectTransparentController:
                 rate.sleep()
                 continue
             
+            # 1. 坐标变换
             mat_pico = pose_to_matrix(self.latest_target_pose)
             mat_robot_target = self.T_pico_to_robot @ mat_pico
             target_pose = matrix_to_pose(mat_robot_target)
+            
+            # !! 新增：发布变换后的目标位姿，供aggregator使用 !!
+            target_pose_msg = PoseStamped()
+            target_pose_msg.header.stamp = rospy.Time.now()
+            target_pose_msg.header.frame_id = "base_link"
+            target_pose_msg.pose = target_pose
+            self.target_pose_pub.publish(target_pose_msg)
 
             # 2. IK 解算
             target_ik_solution = self.ik_solver.get_ik(
                 list(self.last_commanded_positions),
                 target_pose.position.x, target_pose.position.y, target_pose.position.z,
                 target_pose.orientation.x, target_pose.orientation.y, target_pose.orientation.z, target_pose.orientation.w,
-                # !! 关键修改：增加容忍度，让IK更容易找到解 !!
-                bx=0.05, by=0.05, bz=0.05, # 位置容忍度 (5cm)
-                brx=0.3, bry=0.3, brz=0.3    # 姿态容忍度 (~17度)
+                bx=0.05, by=0.05, bz=0.05,
+                brx=0.3, bry=0.3, brz=0.3
             )
 
             if target_ik_solution:
+                # !! 新增：发布IK成功状态 !!
+                self.ik_status_pub.publish(Bool(True))
+                
                 target_positions = np.array(target_ik_solution)
                 
                 # 3. 安全平滑处理...
@@ -131,6 +144,9 @@ class VrDirectTransparentController:
                 self.last_commanded_positions = final_target_positions
                 self.last_commanded_velocity = velocity_limited
             else:
+                # !! 新增：发布IK失败状态 !!
+                self.ik_status_pub.publish(Bool(False))
+                
                 rospy.logwarn_throttle(1.0, "IK solution not found. Holding last position.")
                 cmd_msg = JointPos()
                 cmd_msg.joint = list(self.last_commanded_positions)

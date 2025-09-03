@@ -108,6 +108,8 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   PicoHand.msg
+  DebugInfo.msg
+  LossInfo.msg
 )
 generate_messages(
   DEPENDENCIES
