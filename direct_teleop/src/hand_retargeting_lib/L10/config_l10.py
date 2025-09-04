@@ -4,13 +4,13 @@
 import numpy as np
 
 # --- 权重系数 (从原始代码模板继承，需要您根据实际效果调试) ---
-LAMBDA_ALIGNMENT = 90.0
+LAMBDA_ALIGNMENT = 120.0
 LAMBDA_COORDINATION = 2.0  # 原始代码中的耦合项，建议从一个较小的值开始
 LAMBDA_SMOOTHNESS = 0.0005
 
 # 优化器参数
 MAX_ITER = 15
-TOLERANCE = 1e-4
+TOLERANCE = 1e-5
 
 # Sigmoid 函数参数
 SIGMOID_K = 10.0

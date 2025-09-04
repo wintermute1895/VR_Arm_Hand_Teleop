@@ -20,7 +20,7 @@ class HandOptimizer:
         self.config = config_module
         self.bounds = self._create_bounds()
         # 注意：不再有 self.q_prev_vec 实例变量
-        self.debug_counter = 0
+        # self.debug_counter = 0
 
     def _create_bounds(self):
         """根据传入的config为独立关节创建边界。"""
@@ -37,21 +37,21 @@ class HandOptimizer:
         high = [bound[1] for bound in b]
         return Bounds(low, high)
 
-    def optimize_q(self, w_dict, q_prev_vec):
+    def optimize_q(self, w_dict, q_prev_vec, frame_count):
         """
         主优化函数。它现在是一个无状态的计算函数。
         :param w_dict: 以手指为键的人手关键点字典。
         :param q_prev_vec: 上一帧的最终优化结果，用作本帧的初值和平滑目标。
+        :param frame_count: 当前帧的帧数，用于调试和日志记录。
         """
         # 1. 更新模型内部的人手状态 (v, delta, omega等)
         self.model.update_human_hand_state(w_dict)
         
         # 2. 运行优化器
-        self.debug_counter += 1
         
         result = minimize(
             # 使用lambda函数将 q_prev_vec 捕获到损失函数的调用中
-            fun=lambda q_vec: self._loss_function(q_vec, q_prev_vec),
+            fun=lambda q_vec: self._loss_function(q_vec, q_prev_vec, frame_count),
             x0=q_prev_vec, # 使用传入的 q_prev_vec 作为初值
             method='SLSQP',
             bounds=self.bounds,
@@ -72,12 +72,12 @@ class HandOptimizer:
         final_q_dict = vector_to_angles_dict(result.x, self.config)
 
         # 重新计算一次损失函数以获取详细的分项损失
-        final_loss_info = self._loss_function(result.x, q_prev_vec, return_dict=True)
+        final_loss_info = self._loss_function(result.x, q_prev_vec, frame_count, return_dict=True)
         final_loss_info["status"] = "success"
         
         return final_q_dict, final_loss_info
 
-    def _loss_function(self, q_vec, q_prev_vec, return_dict=False):
+    def _loss_function(self, q_vec, q_prev_vec, frame_count, return_dict=False):
         """
         计算总损失。它现在是一个纯函数，所有依赖都通过参数传入。
         """
@@ -122,7 +122,7 @@ class HandOptimizer:
             total_loss = weighted_align + weighted_contact + weighted_smooth
             
             # --- 调试信息 ---
-            if self.debug_counter % 10 == 0:
+            if frame_count % 10 == 0:
                 print(f"[LOSS] align={loss_conformal:.4f}, contact={loss_contact:.4f}, smooth={loss_smooth:.4f} => TOTAL={total_loss:.4f}")
 
             if np.isnan(total_loss): return 1e10

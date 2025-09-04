@@ -97,6 +97,7 @@ class HandRetargetingAlgorithmNode:
 
                 if self.calibration_state == 2:
                     try:
+                        
                         t_before_process = time.time()
                         w_dict_current = self._pico_array_to_hand_dict(current_pico_array)
                         if w_dict_current is None:
@@ -105,7 +106,7 @@ class HandRetargetingAlgorithmNode:
                         optimizer_this_frame = HandOptimizer(self.robot_model, self.config)
 
                         t_before_opt = time.time()
-                        final_q_dict, loss_info = optimizer_this_frame.optimize_q(w_dict_current, self.last_successful_q_vec)
+                        final_q_dict, loss_info = optimizer_this_frame.optimize_q(w_dict_current, self.last_successful_q_vec,self.frame_count)
                         t_after_opt = time.time()
 
                         self.robot_model.update_robot_hand_state(final_q_dict) # 传入None，因为不再需要内部状态

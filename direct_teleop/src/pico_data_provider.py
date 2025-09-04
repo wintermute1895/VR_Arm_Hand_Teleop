@@ -43,9 +43,9 @@ class PicoJsonDataProvider:
     def run_publisher_loop(self):
         rospy.loginfo("Waiting 1 second for ROS connections to establish...")
         rospy.sleep(1.0)
-        rospy.loginfo("Connections likely established. Starting main publisher loop at 15Hz.")
+        rospy.loginfo("Connections likely established. Starting main publisher loop at 50Hz.")
 
-        rate = rospy.Rate(15)
+        rate = rospy.Rate(50)
         while not rospy.is_shutdown():
             self.process_buffer()
             rate.sleep()
