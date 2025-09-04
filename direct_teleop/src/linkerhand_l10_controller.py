@@ -23,7 +23,7 @@ class LinkerHandL10Controller:
         self.command_pub = rospy.Publisher(
             self.hardware_topic, 
             self.hardware_msg_type, 
-            queue_size=10
+            queue_size=1
         )
         rospy.on_shutdown(self.shutdown_hook)
         rospy.loginfo("LinkerHand L10 Controller is running and waiting for target joint states...")
@@ -68,7 +68,7 @@ class LinkerHandL10Controller:
             self.command_pub.publish(hardware_cmd_msg)
             
             # 5. (可选) 加入日志以确认发布
-            rospy.loginfo_throttle(1.0, f"Successfully published command: {position_cmd_list}")
+            rospy.loginfo_throttle(0.2, f"Successfully published command: {position_cmd_list}")
                 
         except Exception as e:
             rospy.logerr(f"CRITICAL ERROR in target_callback: {e}")
