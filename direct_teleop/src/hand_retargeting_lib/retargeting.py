@@ -75,7 +75,7 @@ class HandOptimizer:
         final_loss_info["status"] = "success"
         
         # 使用节流日志在主控制流中安全地打印调试信息
-        rospy.loginfo_throttle(0.2, 
+        rospy.loginfo_throttle(0.1, 
             f"[LOSS] Total: {final_loss_info['total']:.4f} | "
             f"Align: {final_loss_info['align']:.4f}, "
             f"Couple: {final_loss_info['couple']:.4f}, "

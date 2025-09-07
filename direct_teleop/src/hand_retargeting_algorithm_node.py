@@ -63,7 +63,7 @@ class HandRetargetingAlgorithmNode:
         return hand_dict
 
     def run(self):
-        rate = rospy.Rate(50) # 目标循环频率50Hz
+        rate = rospy.Rate(60) # 目标循环频率50Hz
         rospy.loginfo("\n" + "="*60 + "\nPress 'c' IN THIS TERMINAL to calibrate.\n" + "="*60)
         old_settings = termios.tcgetattr(sys.stdin)
         try:

@@ -56,7 +56,7 @@ class PicoJsonDataProvider:
 
     def run_publisher_loop(self):
         rospy.loginfo("Starting main publisher loop at 100Hz.")
-        rate = rospy.Rate(50)
+        rate = rospy.Rate(60)
         
         while not rospy.is_shutdown():
             t_loop_start = time.time()
@@ -115,7 +115,7 @@ class PicoJsonDataProvider:
             joints.sort(key=lambda j: j.get('id', 99))
             keypoints_list = [Point(p.get('posX',0), p.get('posY',0), p.get('posZ',0)) for p in joints]
             hand_msg.keypoints = keypoints_list
-            rospy.loginfo(f"PROV: Publishing message with stamp {hand_msg.header.stamp.to_sec():.4f}")
+            rospy.loginfo_throttle(1.0, f"PROV: Publishing message with stamp {hand_msg.header.stamp.to_sec():.4f}")
             self.keypoints_pub.publish(hand_msg)
 
             rospy.loginfo_throttle(1.0, f"--> SUCCESS: Published data for '{self.target_hand}'.") # 改为无节流打印，强制暴露问题
