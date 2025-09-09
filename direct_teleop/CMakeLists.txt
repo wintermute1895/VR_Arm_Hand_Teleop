@@ -116,6 +116,26 @@ generate_messages(
   std_msgs geometry_msgs
 )
 
+install(PROGRAMS
+  src/video_udp_sender.py
+  src/pico_ros_bridge.py
+  src/hand_retargeting_algorithm_node.py
+  src/hand_data_collector.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+catkin_install_python(PROGRAMS
+  scripts/video_udp_sender.py
+  scripts/pico_ros_bridge.py
+  scripts/hand_retargeting_algorithm_node.py
+  scripts/hand_data_collector.py
+  scripts/hand_and_RGB_data_collector.py
+  scripts/linkerhand_l10_controller.py
+  scripts/pico_data_provider.py
+  # 如果你还有其他Python ROS节点脚本，请在此处一并列出
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES direct_teleop

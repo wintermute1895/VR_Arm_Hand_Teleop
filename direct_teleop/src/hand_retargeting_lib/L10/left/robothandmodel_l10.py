@@ -4,8 +4,8 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .fk_l10 import HandForwardKinematics_L10
-from .utils_l10 import sigmoid, translation_matrix
+from ..fk_l10 import HandForwardKinematics_L10
+from ..utils_l10 import sigmoid, translation_matrix
 
 class RobotHandModel_L10:
     def __init__(self, config_module, q0_dict, w0_dict):

@@ -11,7 +11,7 @@ class PicoJsonDataProvider:
     def __init__(self, udp_ip="0.0.0.0", udp_port=9999):
         rospy.init_node('pico_data_provider')
 
-        self.target_hand = rospy.get_param('~target_hand', 'HandLeft')
+        self.target_hand = rospy.get_param('~target_hand', 'HandRight')
         self.udp_ip = udp_ip
         self.udp_port = udp_port
 

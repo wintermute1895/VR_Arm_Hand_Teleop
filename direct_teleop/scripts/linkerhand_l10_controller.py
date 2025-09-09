@@ -4,8 +4,8 @@ import numpy as np
 import traceback
 from sensor_msgs.msg import JointState
 
-from hand_retargeting_lib.L10.utils_l10 import convert_q_to_l10_command
-import hand_retargeting_lib.L10.config_l10 as config
+from src.hand_retargeting_lib.L10.utils_l10 import convert_q_to_l10_command
+import direct_teleop.src.hand_retargeting_lib.L10.left.config_l10 as config
 
 class LinkerHandL10Controller:
     def __init__(self):

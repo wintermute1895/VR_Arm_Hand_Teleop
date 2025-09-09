@@ -6,7 +6,7 @@ from scipy.spatial.transform import Rotation
 import rospy
 
 # 导入L10的专属配置
-from . import config_l10 as config
+from .left import config_l10 as config
 
 # ==============================================================================
 # 通用工具函数 (逻辑与算法设计者原始代码一致)

@@ -1,7 +1,13 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import cv2
 import socket
 import numpy as np
 import time
+import rospy
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge  
 
 # --- 配置 ---
 PICO_IP = "192.168.1.105"  # !! 重要：这里需要填入PICO设备的IP地址 !!
@@ -11,9 +17,14 @@ JPEG_QUALITY = 40         # 图像压缩质量 (0-100)，值越低延迟越小
 
 def main():
     # 初始化UDP Socket
+    rospy.init_node('video_udp_sender', anonymous=True)
+    image_pub = rospy.Publisher('/image_raw', Image, queue_size=10)
+    bridge = CvBridge()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     server_address = (PICO_IP, PORT)
     print(f"Starting UDP video stream to {PICO_IP}:{PORT}")
+    print(f"Publishing images to ROS topic /image_raw")
 
     # 初始化摄像头
     cap = cv2.VideoCapture(VIDEO_DEVICE)
@@ -25,7 +36,7 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
     try:
-        while True:
+        while not rospy.is_shutdown():
             ret, frame = cap.read()
             if not ret:
                 print("Error: Can't receive frame. Exiting ...")
@@ -35,17 +46,29 @@ def main():
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
             result, encoded_image = cv2.imencode('.jpg', frame, encode_param)
             
-            if not result:
-                continue
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+        result, encoded_image = cv2.imencode('.jpg', frame, encode_param)
 
-            # 发送数据
+        # 如果编码成功，则通过UDP发送
+        if result:
             try:
                 sock.sendto(encoded_image, server_address)
             except Exception as e:
                 print(f"Network error: {e}")
+        else:
+            print("Image encoding failed, skipping UDP send for this frame.")
+
+        # 发布ROS话题（无论编码是否成功，只要帧读取成功就发布）
+        try:
+            ros_image_msg = bridge.cv2_to_imgmsg(frame, "bgr8")
+            ros_image_msg.header.stamp = rospy.Time.now()
+            image_pub.publish(ros_image_msg)
+        except Exception as e:
+            print(f"Error converting or publishing image: {e}")
             
             # 控制发送频率，避免网络拥堵 (例如 30 FPS)
-            time.sleep(1/30.0)
+            rate = rospy
+            rate.sleep()
 
     except KeyboardInterrupt:
         print("Stream stopped by user.")

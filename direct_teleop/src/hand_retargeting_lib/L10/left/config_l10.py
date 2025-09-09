@@ -3,18 +3,18 @@
 
 import numpy as np
 
-# --- 权重系数 (从原始代码模板继承，需要您根据实际效果调试) ---
-LAMBDA_ALIGNMENT = 155.0
-LAMBDA_COORDINATION = 0.2  # 原始代码中的耦合项，建议从一个较小的值开始
-LAMBDA_SMOOTHNESS = 0.13
+# 权重系数
+LAMBDA_ALIGNMENT = 155.0    # 姿态对齐项
+LAMBDA_COORDINATION = 0.2   # 耦合项
+LAMBDA_SMOOTHNESS = 0.13    # 平滑项
 
 # 优化器参数
-MAX_ITER = 6
-TOLERANCE = 2e-3
+MAX_ITER = 6                # 每次迭代的最大优化步数
+TOLERANCE = 2e-3            # 收敛容忍度   
 
 # Sigmoid 函数参数
-SIGMOID_K = 10.0
-SIGMOID_C = 0.5
+SIGMOID_K = 10.0            # 控制曲线陡峭程度
+SIGMOID_C = 0.5             # 控制曲线中心位置
 
 # =================================================================
 # ==== PICO 数据映射 (数据适配层) ====
