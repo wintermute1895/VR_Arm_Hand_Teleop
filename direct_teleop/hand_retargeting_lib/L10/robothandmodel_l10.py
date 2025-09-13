@@ -1,25 +1,39 @@
 # robothandmodel_l10.py
-# (最终修正版：统一了内部函数名，严格遵循原始代码逻辑)
+# (最终修正版：支持左右手，移除PICO输入镜像变换，依赖标定进行对齐)
 
 import numpy as np
 from scipy.spatial.transform import Rotation
+import copy # 用于深度复制字典
 
-from ..fk_l10 import HandForwardKinematics_L10
-from ..utils_l10 import sigmoid, translation_matrix
+from hand_retargeting_lib.L10.fk_l10 import HandForwardKinematics_L10
+from hand_retargeting_lib.L10.utils_l10 import sigmoid, translation_matrix
+
+# 导入L10的专属配置
+from . import config_l10 as config
 
 class RobotHandModel_L10:
-    def __init__(self, config_module, q0_dict, w0_dict):
+    def __init__(self, config_module, q0_dict, w0_dict, hand_type='left'):
         self.config = config_module
-        self.fk = HandForwardKinematics_L10(self.config)
+        self.hand_type = hand_type # 存储当前操作的手型
+        
+        # 根据手型动态获取关节信息和基座位置
+        self.finger_base_positions = config.get_finger_base_positions(hand_type)
+        self.joint_info = config.get_joint_info(hand_type)
+
+        self.fk = HandForwardKinematics_L10(self.config, hand_type=hand_type) # FK模块也需要知道手型
         self.q = q0_dict
-        self.w = w0_dict
+        self.w = w0_dict # 初始w，通常是标定时的w_star_dict
         
         self.T_align = np.eye(4)
         self.d_max, self.d_min = {}, {}
         self.v, self.delta, self.d_contact, self.omega = {}, {}, {}, {}
 
     def update_human_hand_state(self, new_w_dict):
-        self.w = new_w_dict
+        # --- [核心修正] 移除这里的镜像处理 ---
+        # 假设传入的 new_w_dict 永远是原始的 PICO 关键点
+        # 所有的坐标系对齐都由 calibrate 函数计算出的 T_align 矩阵负责
+        self.w = new_w_dict 
+            
         self._compute_v()
         self._compute_delta()
         self._compute_d_contact()
@@ -28,13 +42,13 @@ class RobotHandModel_L10:
     def update_robot_hand_state(self, new_q_dict):
         self.q = new_q_dict
         
-    # --- !! 核心修正 1：将函数名统一为 _get_base_pose_keypoints !! ---
     def _get_base_pose_keypoints(self):
         """
         计算机器人手在“完全张开”(max_limit)姿态下的关键点。
         这个姿态是所有后续计算的基准。
         """
-        q_open = {finger: [limit[1] for limit in self.config.JOINT_INFO[finger]['limits']] 
+        # 动态使用当前手型下的关节信息
+        q_open = {finger: [limit[1] for limit in self.joint_info[finger]['limits']] 
                   for finger in self.config.ALL_FINGER_NAMES}
         return self.fk.calculate_fk_all_keypoints(q_open)
 
@@ -62,12 +76,15 @@ class RobotHandModel_L10:
 
     def calibrate(self, w_star_dict):
         print("Starting calibration based on original 3-point frame logic...")
-        # !! 核心修正 2：确保调用统一后的函数名 !!
+        
+        # calibrate 函数接收的是原始的、未经镜像的 PICO 关键点
+        # 它将直接对齐这两个坐标系
+        
         fk_q0 = self._get_base_pose_keypoints()
         
         required_keys = ['wrist', 'index', 'pinky']
-        if not all(key in w_star_dict and len(w_star_dict[key]) > 0 for key in required_keys):
-            raise ValueError("Required keypoints (wrist, index, pinky) not found.")
+        if not all(key in w_star_dict and isinstance(w_star_dict[key], np.ndarray) and w_star_dict[key].size > 0 for key in required_keys):
+            raise ValueError("Required keypoints (wrist, index, pinky) not found or invalid in w_star_dict for calibration.")
         
         w_wrist = w_star_dict['wrist'][0]
         w_index_mcp = w_star_dict['index'][0]
@@ -95,7 +112,7 @@ class RobotHandModel_L10:
                 if finger == 'thumb' or not isinstance(points, np.ndarray) or points.size == 0: continue
                 distance = np.linalg.norm(points[-1] - thumb_tip_star)
                 new_d_max[finger] = distance
-                new_d_min[finger] = 0.005
+                new_d_min[finger] = 0.005 # 最小耦合距离
         
         self.d_max, self.d_min = new_d_max, new_d_min
         print("Calibration finished successfully!")
@@ -109,7 +126,7 @@ class RobotHandModel_L10:
             w_aligned[key] = w_aligned_homo[:, :3]
 
         v_final = {}
-        # !! 核心修正 3：确保调用统一后的函数名 !!
+        # 动态使用当前手型下的关节信息
         fk_q0 = self._get_base_pose_keypoints()
 
         for finger in self.config.FINGER_NAMES:
@@ -126,6 +143,7 @@ class RobotHandModel_L10:
                 norm_segment = np.linalg.norm(segment_vec_aligned)
                 direction = segment_vec_aligned / norm_segment if norm_segment > 1e-6 else np.array([0,0,0])
                 
+                # 动态使用当前手型下的关节信息
                 robot_segment_len = np.linalg.norm(fk_q0[finger][j] - fk_q0[finger][j-1])
                 final_segment_vec = direction * robot_segment_len
                 v_points_list[j] = v_points_list[j-1] + final_segment_vec

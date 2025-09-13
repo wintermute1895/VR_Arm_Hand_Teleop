@@ -8,26 +8,26 @@ import numpy as np
 from scipy.optimize import minimize, Bounds
 import rospy
 import traceback
+import copy
 
 # 导入通用的工具函数
 from hand_retargeting_lib.L10.utils_l10 import vector_to_angles_dict, angles_dict_to_vector
 
 class HandOptimizer:
     def __init__(self, robot_hand_model, config_module):
-        """
-        构造函数。
-        :param robot_hand_model: 一个已初始化的 RobotHandModel 对象。
-        :param config_module: 对应的配置模块 (e.g., config_l10)。
-        """
         self.model = robot_hand_model
-        self.config = config_module
+        # 注意：这里我们不再需要 config_module 的静态引用
+        # self.config = config_module 
+        self.config = config_module # 仍保留，用于访问 LAMBDA_* 等常量
         self.bounds = self._create_bounds()
 
     def _create_bounds(self):
         """根据传入的config为独立关节创建边界。"""
         b = []
+        # 使用 self.model.joint_info 代替 self.config.JOINT_INFO
+        joint_info = self.model.joint_info 
         for finger in self.config.FINGER_NAMES:
-            finger_info = self.config.JOINT_INFO.get(finger, {})
+            finger_info = joint_info.get(finger, {})
             mimic_info = finger_info.get('mimic', {})
             names = finger_info.get('names', [])
             limits = finger_info.get('limits', [])
@@ -39,18 +39,10 @@ class HandOptimizer:
         return Bounds(low, high)
 
     def optimize_q(self, w_dict, q_prev_vec, frame_count):
-        """
-        主优化函数。它负责调用纯计算的loss函数并处理日志。
-        :param w_dict: 以手指为键的人手关键点字典。
-        :param q_prev_vec: 上一帧的最终优化结果，用作本帧的初值和平滑目标。
-        :param frame_count: 当前帧的帧数，用于节流日志。
-        """
-        # 1. 更新模型内部的人手状态 (v, delta, omega等)
         self.model.update_human_hand_state(w_dict)
         
-        # 2. 运行优化器
+        # 运行优化器
         result = minimize(
-            # 将一个纯计算的、无副作用的函数传递给优化器
             fun=lambda q_vec: self._loss_function(q_vec, q_prev_vec),
             x0=q_prev_vec,
             method='SLSQP',
@@ -62,15 +54,17 @@ class HandOptimizer:
             }
         )
 
-        # 3. 处理并返回结果
+        # 处理并返回结果
         if not result.success:
-            final_q_dict = vector_to_angles_dict(q_prev_vec, self.config)
+            # [修正]：这里必须传入 self.model.joint_info
+            final_q_dict = vector_to_angles_dict(q_prev_vec, self.model.joint_info)
             return final_q_dict, {"status": "failed", "message": result.message}
 
         final_q_vec = result.x
-        final_q_dict = vector_to_angles_dict(final_q_vec, self.config)
+        # 传递 self.model.joint_info
+        final_q_dict = vector_to_angles_dict(final_q_vec, self.model.joint_info)
 
-        # 4. 优化成功后，安全地获取详细损失信息并记录日志
+        # 优化成功后，安全地获取详细损失信息并记录日志
         final_loss_info = self._loss_function(final_q_vec, q_prev_vec, return_dict=True)
         final_loss_info["status"] = "success"
         
@@ -82,17 +76,20 @@ class HandOptimizer:
             f"Smooth: {final_loss_info['smooth']:.4f}"
         )
         
-        return final_q_dict, final_loss_info
+        return final_q_dict, copy.copy(final_loss_info)
 
     def _loss_function(self, q_vec, q_prev_vec, return_dict=False):
-        """
-        计算总损失。这是一个纯计算函数，没有任何I/O或ROS调用。
-        """
         try:
-            q_dict = vector_to_angles_dict(q_vec, self.config)
+            # 1. 关节向量 -> 关节字典
+            q_dict = vector_to_angles_dict(q_vec, self.model.joint_info)
+            
+            # 2. 正向运动学计算
             robot_keypoints = self.model.fk.calculate_fk_all_keypoints(q_dict)
             
-            # --- 1. 姿态对齐损失 (loss_align) ---
+            if not robot_keypoints:
+                raise ValueError("Forward kinematics returned no keypoints.")
+            
+            # --- 3. 姿态对齐损失 (loss_align) ---
             loss_align = 0.0
             points_compared = 0
             for finger in self.config.FINGER_NAMES:
@@ -107,7 +104,12 @@ class HandOptimizer:
             if points_compared > 0:
                 loss_align /= points_compared
             
-            # --- 2. 指间耦合损失 (loss_couple) ---
+            # --- [新增探针和断言] ---
+            if np.isnan(loss_align) or np.isinf(loss_align):
+                rospy.logerr("[LOSS_DEBUG] CRITICAL: loss_align is NaN or Inf!")
+                return 1e10 # 返回一个巨大的值，而不是NaN
+
+            # --- 4. 指间耦合损失 (loss_couple) ---
             loss_couple = 0.0
             robot_tips = {finger: pts[-1] for finger, pts in robot_keypoints.items() if len(pts) > 0}
             if 'thumb' in robot_tips:
@@ -118,31 +120,46 @@ class HandOptimizer:
                         delta_i = self.model.delta[finger]
                         omega_i = self.model.omega.get(finger, 0.0)
                         loss_couple += omega_i * np.sum((delta_i - g_i)**2)
+            
+            # --- [新增探针和断言] ---
+            if np.isnan(loss_couple) or np.isinf(loss_couple):
+                rospy.logerr("[LOSS_DEBUG] CRITICAL: loss_couple is NaN or Inf!")
+                return 1e10
 
-            # --- 3. 时间平滑损失 (loss_smooth) ---
+            # --- 5. 时间平滑损失 (loss_smooth) ---
             loss_smooth = np.sum((q_vec - q_prev_vec)**2)
 
-            # --- 4. 计算加权总损失 ---
+            # --- [新增探针和断言] ---
+            if np.isnan(loss_smooth) or np.isinf(loss_smooth):
+                rospy.logerr("[LOSS_DEBUG] CRITICAL: loss_smooth is NaN or Inf!")
+                return 1e10
+
+            # --- 6. 计算加权总损失 ---
             weighted_align = self.config.LAMBDA_ALIGNMENT * loss_align
             weighted_couple = self.config.LAMBDA_COORDINATION * loss_couple
             weighted_smooth = self.config.LAMBDA_SMOOTHNESS * loss_smooth
             total_loss = weighted_align + weighted_couple + weighted_smooth
             
+            # --- [新增探针] 每隔一段时间打印一次，避免刷屏 ---
+            if not hasattr(self, 'loss_call_count'):
+                self.loss_call_count = 0
+            self.loss_call_count += 1
+            if self.loss_call_count % 50 == 0: # 每50次调用打印一次
+                rospy.loginfo(f"[LOSS_DEBUG] q_in:{np.round(q_vec, 2)}, L_align:{loss_align:.4f}, L_couple:{loss_couple:.4f}, L_smooth:{loss_smooth:.4f}, Total:{total_loss:.4f}")
+
             if np.isnan(total_loss): 
+                rospy.logerr(f"[LOSS_DEBUG] CRITICAL: total_loss is NaN! Components: align={weighted_align}, couple={weighted_couple}, smooth={weighted_smooth}")
                 return 1e10
             
             if return_dict:
-                return {
-                    "total": total_loss, 
-                    "align": weighted_align,
-                    "couple": weighted_couple, 
-                    "smooth": weighted_smooth
-                }
+                return {           "total": total_loss, 
+            "align": weighted_align,
+            "couple": weighted_couple, # 确保这里是 couple
+            "smooth": weighted_smooth }
             else:
                 return total_loss
 
         except Exception as e:
-            # 仅在发生严重错误时打印，这不会频繁发生
-            print(f"[RETARGETING CRITICAL ERROR] in _loss_function: {e}")
-            traceback.print_exc()
+            rospy.logerr(f"[RETARGETING CRITICAL ERROR] in _loss_function: {e}")
+            rospy.logerr(traceback.format_exc())
             return 1e10

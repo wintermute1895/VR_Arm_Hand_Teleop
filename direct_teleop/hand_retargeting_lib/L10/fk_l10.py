@@ -1,27 +1,36 @@
 # fk_l10.py
-# (为LinkerHand L10模型设计的、运动学正确的正向运动学计算模块)
+# (为LinkerHand L10模型设计的、运动学正确的正向运动学计算模块 - 支持左右手)
 
 import numpy as np
 import rospy
 
 # 导入L10的专属依赖
 from .utils_l10 import rotation_matrix, translation_matrix
+from hand_retargeting_lib.L10 import config_l10 as config # 确保导入config模块
 
 class HandForwardKinematics_L10:
-    def __init__(self, config_module):
+    def __init__(self, config_module, hand_type='left'): # 接收hand_type参数
         """
         构造函数。
         :param config_module: 导入的 config_l10 模块。
+        :param hand_type: 'left' 或 'right'，当前手型。
         """
         self.config = config_module
+        self.hand_type = hand_type # 存储手型
+        
+        # 在这里动态获取 JOINT_INFO 和 FINGER_BASE_POSITIONS
+        self.joint_info = config.get_joint_info(self.hand_type)
+        self.finger_base_positions = config.get_finger_base_positions(self.hand_type)
+
 
     def calculate_fk_single_finger(self, finger_type, joint_angles_full):
         """
         [最终正确版] 根据URDF参数计算一个手指上所有连杆末端的位置。
         它使用标准的串联变换矩阵方法。
         """
-        finger_info = self.config.JOINT_INFO[finger_type]
-        base_pos = self.config.FINGER_BASE_POSITIONS[finger_type]
+        # 使用self.joint_info和self.finger_base_positions而不是self.config.JOINT_INFO
+        finger_info = self.joint_info[finger_type]
+        base_pos = self.finger_base_positions[finger_type]
         
         num_joints_in_chain = len(finger_info['names'])
         if len(joint_angles_full) != num_joints_in_chain:
@@ -69,13 +78,14 @@ class HandForwardKinematics_L10:
         for finger in self.config.ALL_FINGER_NAMES: # 使用ALL_FINGER_NAMES以计算所有模型
             if finger in joint_angles_dict:
                 angles = joint_angles_dict[finger]
-                num_expected = len(self.config.JOINT_INFO[finger]['names'])
+                # 动态使用当前手型下的关节信息
+                num_expected = len(self.joint_info[finger]['names']) 
                 
                 if len(angles) == num_expected:
                     results[finger] = self.calculate_fk_single_finger(finger, angles)
                 else:
                     # 如果关节角度数量不匹配，则跳过并打印警告
-                    rospy.logwarn_throttle(5.0, f"FK mismatch for finger '{finger}': Expected {num_expected} angles, got {len(angles)}. Skipping.")
+                    rospy.logwarn_throttle(5.0, f"FK mismatch for finger '{finger}' with hand type '{self.hand_type}': Expected {num_expected} angles, got {len(angles)}. Skipping.")
         return results
 
     def calculate_fk_all_fingertips(self, joint_angles_dict):

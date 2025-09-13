@@ -19,7 +19,7 @@ class VrRvizController:
         # 机械臂的基座Link名称 (IK求解的参考坐标系)
         self.base_link = "base_link" 
         # 机械臂的末端Link名称 (IK求解的目标Link)
-        self.end_effector_link = "Link7" 
+        self.end_effector_link = "Link6" 
         # IK求解的超时时间 (秒)
         self.ik_timeout = 0.005 
         # 发布频率 (Hz)

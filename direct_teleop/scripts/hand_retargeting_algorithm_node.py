@@ -29,15 +29,25 @@ class HandRetargetingAlgorithmNode:
             self.optimizer = None
             self.frame_count = 0
             self.last_successful_q_vec = None
+
+            # --- [新增] 获取手型参数 ---
+            # 从ROS参数服务器获取当前操作的手型，默认是左手
+            self.hand_type = rospy.get_param('~hand_type', 'right') 
+            rospy.loginfo(f"Operating in '{self.hand_type}' hand mode.")
             
             # 使用一个队列专门接收真正需要的数据
             self.pico_keypoints_queue = Queue(maxsize=10) # 适当的缓冲大小
 
-            self.hand_joint_pub = rospy.Publisher('/hand_retargeting/target_joint_states', JointState, queue_size=1)
+            # --- [核心修正] 根据 hand_type 动态构建 Publisher ---
+            joint_states_topic = f'/hand_retargeting/target_joint_states_{self.hand_type}'
+            self.hand_joint_pub = rospy.Publisher(joint_states_topic, JointState, queue_size=1)
+            rospy.loginfo(f"Publishing target joint states to: {joint_states_topic}")
+            # --- 结束核心修正 ---
             self.loss_pub = rospy.Publisher('/debug/loss_info', LossInfo, queue_size=1)
             
-            # 只订阅手部重定向算法必要的话题
-            rospy.Subscriber('/pico/hand/keypoints', PicoHand, self.pico_keypoints_callback, queue_size=1, buff_size=2**24)
+            # 根据手型订阅正确的PICO数据话题
+            self.pico_data_topic = f'/pico/hand_{self.hand_type}_data' # 假设pico_ros_bridge.py会发布hand_left_data或hand_right_data
+            rospy.Subscriber(self.pico_data_topic, PicoHand, self.pico_keypoints_callback, queue_size=1, buff_size=2**24)
             
             rospy.loginfo(">>>> Node initialization COMPLETE. <<<<")
         except Exception as e:
@@ -56,6 +66,7 @@ class HandRetargetingAlgorithmNode:
             pass
 
     def _pico_array_to_hand_dict(self, pico_array):
+        # 此处不进行镜像变换，镜像逻辑已移至 RobotHandModel
         if not isinstance(pico_array, np.ndarray) or pico_array.shape[0] < 26: return None
         hand_dict = {'wrist': np.expand_dims(pico_array[self.config.PICO_WRIST_ID], axis=0)}
         for finger, id_list in self.config.PICO_FINGER_KEYPOINT_IDS.items():
@@ -63,8 +74,8 @@ class HandRetargetingAlgorithmNode:
         return hand_dict
 
     def run(self):
-        rate = rospy.Rate(60) # 目标循环频率50Hz
-        rospy.loginfo("\n" + "="*60 + "\nPress 'c' IN THIS TERMINAL to calibrate.\n" + "="*60)
+        rate = rospy.Rate(60) # 目标循环频率60Hz
+        rospy.loginfo("\n" + "="*60 + f"\nPress 'c' IN THIS TERMINAL to calibrate for {self.hand_type} hand.\n" + "="*60)
         old_settings = termios.tcgetattr(sys.stdin)
         try:
             tty.setcbreak(sys.stdin.fileno())
@@ -80,13 +91,18 @@ class HandRetargetingAlgorithmNode:
                 # --- 从队列中获取最新数据 ---
                 latest_keypoints_msg = None
                 try:
-                    # 清空队列，只保留最新的一个消息
+                    # 直接从队列中取出所有当前可用的消息
+                    all_messages_in_queue = []
                     while not self.pico_keypoints_queue.empty():
-                        latest_keypoints_msg = self.pico_keypoints_queue.get_nowait()
+                        all_messages_in_queue.append(self.pico_keypoints_queue.get_nowait())
+                    
+                    # 如果我们取到了任何消息，只使用最新的那一个
+                    if all_messages_in_queue:
+                        latest_keypoints_msg = all_messages_in_queue[-1]
                 except Empty:
                     pass
 
-                # 如果没有新数据，则跳过本次循环，避免空转
+                # 如果没有新数据，则跳过本次循环
                 if latest_keypoints_msg is None:
                     rate.sleep()
                     continue
@@ -97,21 +113,41 @@ class HandRetargetingAlgorithmNode:
                 # --- 状态机：处理标定 ---
                 if self.calibration_state == 1:
                     try:
+                        # [探针 1] 确认我们收到了PICO数据
+                        rospy.loginfo("[CALIB_DEBUG] State 1 entered. PICO message timestamp: {}".format(latest_keypoints_msg.header.stamp.to_sec()))
+                        
                         w0_dict = self._pico_array_to_hand_dict(current_pico_array)
-                        if w0_dict is None: raise ValueError("Initial PICO data for calibration is invalid.")
+                        if w0_dict is None: 
+                            rospy.logerr("[CALIB_DEBUG] FAILED at step 1: _pico_array_to_hand_dict returned None. Check PICO data format.")
+                            raise ValueError("Initial PICO data for calibration is invalid.")
                         
-                        q0_dict = {f: [0.0]*len(self.config.JOINT_INFO[f]['names']) for f in self.config.ALL_FINGER_NAMES}
+                        # [探针 2] 打印用于标定的关键点，检查其数值
+                        wrist_pt = w0_dict.get('wrist', [np.array([0,0,0])])[0]
+                        index_pt = w0_dict.get('index', [np.array([0,0,0])])[0]
+                        pinky_pt = w0_dict.get('pinky', [np.array([0,0,0])])[0]
+                        rospy.loginfo(f"[CALIB_DEBUG] Using keypoints for frame creation: wrist={wrist_pt}, index_mcp={index_pt}, pinky_mcp={pinky_pt}")
+
+                        # [探针 3] 确认RobotHandModel初始化
+                        q0_dict = {f: [0.0]*len(self.config.get_joint_info(self.hand_type)[f]['names']) for f in self.config.ALL_FINGER_NAMES}
+                        self.robot_model = RobotHandModel(self.config, q0_dict, w0_dict, hand_type=self.hand_type)
+                        rospy.loginfo("[CALIB_DEBUG] RobotHandModel initialized successfully.")
                         
-                        self.robot_model = RobotHandModel(self.config, q0_dict, w0_dict)
+                        # [探针 4] 调用calibrate
+                        rospy.loginfo("[CALIB_DEBUG] Calling robot_model.calibrate()...")
                         self.robot_model.calibrate(w0_dict)
-                        self.optimizer = HandOptimizer(self.robot_model, self.config)
+                        rospy.loginfo("[CALIB_DEBUG] robot_model.calibrate() finished successfully.")
                         
-                        self.last_successful_q_vec = angles_dict_to_vector(q0_dict, self.config)
+                        # [探针 5] 初始化优化器
+                        self.optimizer = HandOptimizer(self.robot_model, self.config)
+                        rospy.loginfo("[CALIB_DEBUG] HandOptimizer initialized successfully.")
+                        
+                        self.last_successful_q_vec = angles_dict_to_vector(q0_dict, self.config.get_joint_info(self.hand_type))
 
                         self.calibration_state = 2
                         rospy.loginfo(">>>> CALIBRATION SUCCESSFUL! Starting retargeting... <<<<")
                     except Exception as e_calib:
                         rospy.logerr(f"Calibration FAILED: {e_calib}. Please move hand into view and press 'c' again.")
+                        rospy.logerr(traceback.format_exc()) # 打印完整的错误堆栈
                         self.calibration_state = 0
                     rate.sleep()
                     continue
@@ -126,21 +162,31 @@ class HandRetargetingAlgorithmNode:
                             continue
                         
                         t_before_opt = time.time()
+                        
+                        # update_human_hand_state 应该在 optimize_q 内部被调用
+                        # self.robot_model.update_human_hand_state(w_dict_current) 
                         final_q_dict, loss_info = self.optimizer.optimize_q(w_dict_current, self.last_successful_q_vec, self.frame_count)
+                        
+                        # --- [核心修正] t_after_opt 必须在 optimize_q 之后立刻定义 ---
                         t_after_opt = time.time()
 
                         self.robot_model.update_robot_hand_state(final_q_dict)
 
-                        if loss_info["status"] == "success":
-                            self.last_successful_q_vec = angles_dict_to_vector(final_q_dict, self.config)                           
+                        # --- [新增探针] 打印刚收到的 loss_info ---
+                        rospy.loginfo_throttle(1.0, f"[NODE_DEBUG] Received loss_info from optimizer: {loss_info}")
+                        
+                        if loss_info.get("status") == "success": # 使用 .get() 更安全
+                            rospy.loginfo_throttle(1.0, "[NODE_DEBUG] Optimization SUCCESS. Publishing joint states...")
+                            self.last_successful_q_vec = angles_dict_to_vector(final_q_dict, self.config.get_joint_info(self.hand_type))                           
                             self.publish_joint_states(final_q_dict)
                             self.publish_loss_info(loss_info)
                         else:
-                            rospy.logwarn_throttle(1.0, f"Optimization FAILED: {loss_info.get('message', 'N/A')}")
+                            # 强制打印每次失败，以防万一
+                            rospy.logwarn(f"[NODE_DEBUG] Optimization FAILED: {loss_info.get('message', 'N/A')}")
                         
                         t_loop_end = time.time()
                         pico_to_now_delay = (rospy.Time.now() - current_pico_timestamp).to_sec()
-                        rospy.loginfo_throttle(0.2, 
+                        rospy.loginfo_throttle(1.0,
                             f"--- LATENCY (ms) --- "
                             f"PICO-to-Now: {pico_to_now_delay*1000:5.1f} | "
                             f"Total Loop: {(t_loop_end - t_loop_start)*1000:5.1f} | "
@@ -158,9 +204,11 @@ class HandRetargetingAlgorithmNode:
         js_msg = JointState()
         js_msg.header.stamp = rospy.Time.now()
         positions, names = [], []
+        # 动态使用当前手型下的关节信息
+        current_joint_info = self.config.get_joint_info(self.hand_type)
         for finger in self.config.FINGER_NAMES:
             if finger in q_dict:
-                names.extend(self.config.JOINT_INFO[finger]['names'])
+                names.extend(current_joint_info[finger]['names'])
                 positions.extend(q_dict[finger])
         js_msg.name = names
         js_msg.position = positions

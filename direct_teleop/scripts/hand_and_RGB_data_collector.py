@@ -1,58 +1,61 @@
 #!/usr/bin/env python3
 
 import rospy
-import message_filters
-from sensor_msgs.msg import Image, JointState
-import cv2
-from cv_bridge import CvBridge, CvBridgeError
-import numpy as np 
-import pandas as pd
+import subprocess
+import signal
 import os
 import time
 from std_msgs.msg import String # 用于接收简单的控制指令
 
+# --- 不需要导入的库 (因为不再在节点内部处理图像和DataFrame) ---
+# import message_filters
+# from sensor_msgs.msg import Image, JointState
+# import cv2
+# from cv_bridge import CvBridge, CvBridgeError
+# import numpy as np 
+# import pandas as pd
+# from direct_teleop.msg import PicoHand 
+
 class HandDataCollector:
     def __init__(self, save_root_path):
-        rospy.init_node('hand_data_collector', anonymous=True)
+        rospy.init_node('hand_data_collector_controller', anonymous=True) # 节点名更明确为控制器
 
-        # --- 核心组件 ---
-        self.bridge = CvBridge()
+        # self.bridge = CvBridge() # 不需要了
+        
+        # --- [修改] 从参数服务器获取目标手型 ---
+        self.target_hand_type = rospy.get_param('~target_hand_type', 'left') # 默认左手
+        rospy.loginfo(f"Data Collector configured for '{self.target_hand_type}' hand (using rosbag).")
 
         # --- 数据存储设置 ---
         self.save_root_path = save_root_path
-        self.current_episode_path = ""
         self.episode_count = self._get_latest_episode_count()
-        self.frame_count = 0
+        # self.frame_count = 0 # 不需要了
         self.is_recording = False
-        self.collected_data = []
+        self.rosbag_process = None # 存储 rosbag 进程的句柄
+        # self.collected_data = [] # 不需要了
 
-        # --- ROS 订阅与同步 ---
-        # 1. 创建订阅者
-        image_sub = message_filters.Subscriber('/image_raw', Image)
-        hand_cmd_sub = message_filters.Subscriber('/cb_left_hand_control_cmd', JointState)
-
-        # 2. 使用 ApproximateTimeSynchronizer 进行同步
-        # queue_size: 内部缓冲区大小
-        # slop: 允许消息时间戳的最大差异（秒），这是关键参数！
-        self.ts = message_filters.ApproximateTimeSynchronizer(
-            [image_sub, hand_cmd_sub], 
-            queue_size=30, 
-            slop=0.05  # 50ms的容忍度，对于30Hz的摄像头和50Hz的控制器来说足够了
-        )
-
-        # 3. 注册同步回调函数
-        self.ts.registerCallback(self.synchronized_callback)
-
-        # 4. 创建一个控制话题，用于开始/停止录制
+        # --- ROS 订阅 (只订阅控制指令) ---
         rospy.Subscriber('/recording_control', String, self.control_callback)
 
+        # --- rosbag 录制话题列表 ---
+        # 动态构建需要录制的话题列表
+        self.topics_to_record = [
+            '/image_raw', # 摄像头图像
+            f'/pico/hand_{self.target_hand_type}_data', # PICO原始关键点
+            f'/hand_retargeting/target_joint_states_{self.target_hand_type}', # 算法节点发布的关节指令
+            f'/cb_{self.target_hand_type}_hand_control_cmd', # 硬件控制节点发布的指令
+            # 你也可以根据需要添加其他话题，例如 /joint_states (机械臂本体关节状态)
+            '/joint_states' # 原始机械臂关节状态，这对于模仿学习也很重要
+        ]
+        
         rospy.loginfo("="*50)
         rospy.loginfo("Hand Data Collector is running.")
-        rospy.loginfo(f"Data will be saved in: {self.save_root_path}")
+        rospy.loginfo(f"Raw rosbag data will be saved in: {self.save_root_path}")
+        rospy.loginfo(f"Configured to record for '{self.target_hand_type}' hand.")
         rospy.loginfo("To start recording an episode, run:")
-        rospy.loginfo("rostopic pub /recording_control std_msgs/String \"data: 'start'\"")
-        rospy.loginfo("To stop and save, run:")
-        rospy.loginfo("rostopic pub /recording_control std_msgs/String \"data: 'stop'\"")
+        rospy.loginfo("rostopic pub /recording_control std_msgs/String \"data: 'start'\" -1")
+        rospy.loginfo("To stop recording, run:")
+        rospy.loginfo("rostopic pub /recording_control std_msgs/String \"data: 'stop'\" -1")
         rospy.loginfo("="*50)
 
     def _get_latest_episode_count(self):
@@ -62,7 +65,9 @@ class HandDataCollector:
         existing_episodes = [d for d in os.listdir(self.save_root_path) if d.startswith('episode_')]
         if not existing_episodes:
             return 0
-        return max([int(d.split('_')[1]) for d in existing_episodes])
+        # 从文件名中提取数字部分
+        return max([int(d.split('_')[1]) for d in existing_episodes if len(d.split('_')) > 1])
+
 
     def control_callback(self, msg):
         """接收开始/停止指令"""
@@ -72,70 +77,58 @@ class HandDataCollector:
             self.stop_and_save_episode()
 
     def start_new_episode(self):
-        """开始一个新的数据采集片段"""
+        """开始一个新的数据采集片段，并启动rosbag录制"""
         self.is_recording = True
         self.episode_count += 1
-        self.frame_count = 0
-        self.collected_data = []
+        # self.frame_count = 0 # 不需要了
+        # self.collected_data = [] # 不需要了
         
-        self.current_episode_path = os.path.join(self.save_root_path, f"episode_{self.episode_count:04d}")
-        os.makedirs(os.path.join(self.current_episode_path, "images"), exist_ok=True)
+        # 定义rosbag文件名
+        bag_name = os.path.join(self.save_root_path, f"episode_{self.episode_count:04d}_{self.target_hand_type}_{time.strftime('%Y%m%d_%H%M%S')}.bag")
+        record_command = ['rosbag', 'record', '-O', bag_name, '--duration=0'] + self.topics_to_record # --duration=0 表示无限录制直到Ctrl+C或接收到信号
         
-        rospy.loginfo(f"--- Started recording Episode {self.episode_count} ---")
+        try:
+            rospy.loginfo(f"Attempting to start rosbag recording for Episode {self.episode_count} to {bag_name}.")
+            self.rosbag_process = subprocess.Popen(record_command, preexec_fn=os.setsid) # preexec_fn 确保进程组正确
+            rospy.loginfo(f"--- Started rosbag recording for Episode {self.episode_count} to {bag_name}. PID: {self.rosbag_process.pid} ---")
+        except Exception as e:
+            rospy.logerr(f"Failed to start rosbag: {e}")
+            self.rosbag_process = None
+            self.is_recording = False # 启动失败则不进入录制状态
 
     def stop_and_save_episode(self):
-        """停止并保存当前片段的数据"""
-        self.is_recording = False
-        
-        if not self.collected_data:
-            rospy.logwarn("No data collected in this episode. Nothing to save.")
-            return
-
-        # 将列表转换为Pandas DataFrame并保存
-        df = pd.DataFrame(self.collected_data)
-        csv_path = os.path.join(self.current_episode_path, "hand_actions.csv")
-        df.to_csv(csv_path, index=False)
-        
-        rospy.loginfo(f"--- Stopped recording. Saved {self.frame_count} frames to {self.current_episode_path} ---")
-
-    def synchronized_callback(self, image_msg, hand_cmd_msg):
-        """这是核心函数，只有当消息同步时才会被调用"""
+        """停止并保存当前片段的数据 (通过停止rosbag)"""
         if not self.is_recording:
+            rospy.logwarn("Not currently recording. Ignoring stop command.")
             return
 
-        try:
-            # 1. 处理图像
-            cv_image = self.bridge.imgmsg_to_cv2(image_msg, "bgr8")
-            image_filename = f"{self.frame_count:05d}.jpg"
-            image_save_path = os.path.join(self.current_episode_path, "images", image_filename)
-            cv2.imwrite(image_save_path, cv_image)
+        rospy.loginfo(f"--- Stopping recording Episode {self.episode_count} for {self.target_hand_type} hand ---")
+        if self.rosbag_process:
+            # os.killpg(os.getpgid(self.rosbag_process.pid), signal.SIGINT) # 向进程组发送SIGINT
+            self.rosbag_process.send_signal(signal.SIGINT) # Ctrl+C
+            self.rosbag_process.wait(timeout=5) # 等待rosbag进程终止，超时5秒
+            if self.rosbag_process.poll() is None: # 如果进程仍在运行，强制终止
+                rospy.logwarn("Rosbag process did not terminate gracefully, killing it.")
+                self.rosbag_process.kill()
+            rospy.loginfo("Rosbag recording stopped.")
+            self.rosbag_process = None
+        else:
+            rospy.logwarn("No active rosbag process found.")
+        
+        self.is_recording = False # 标记为停止录制
+        rospy.loginfo(f"--- Episode {self.episode_count} raw data saved to rosbag. ---")
 
-            # 2. 提取手部指令
-            # 确保你的JointState消息的position字段包含了10个关节角度
-            joint_positions = list(hand_cmd_msg.position)
-            if len(joint_positions) != 10:
-                rospy.logwarn_throttle(5.0, f"Expected 10 joint positions, but received {len(joint_positions)}. Skipping frame.")
-                return
+    # [移除] synchronized_callback，因为它不再用于实时保存
+    # def synchronized_callback(self, image_msg, pico_keypoints_msg, hand_cmd_msg):
+    #     pass # 这个函数现在是空的，或者直接移除
 
-            # 3. 将数据添加到临时列表中
-            row_data = {'image_filename': image_filename}
-            for i, pos in enumerate(joint_positions):
-                row_data[f'joint_{i}'] = pos
-            
-            self.collected_data.append(row_data)
-            self.frame_count += 1
-
-        except CvBridgeError as e:
-            rospy.logerr(f"CvBridge Error: {e}")
-        except Exception as e:
-            rospy.logerr(f"An error occurred in callback: {e}")
-            
     def run(self):
         rospy.spin()
 
 if __name__ == '__main__':
     # 定义你的数据集要保存的根目录
-    dataset_path = os.path.expanduser("~/robot_hand_dataset") 
+    # rosbag 会直接保存在这个目录下
+    dataset_path = os.path.expanduser("~/robot_hand_raw_bags") 
     
     try:
         collector = HandDataCollector(save_root_path=dataset_path)

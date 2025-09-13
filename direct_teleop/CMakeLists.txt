@@ -105,6 +105,11 @@ find_package(catkin REQUIRED COMPONENTS
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 
+# --- [新增] 声明 Python 模块目录 ---
+# 这会告诉Python解释器去哪里找 hand_retargeting_lib 模块
+# 通常 catkin_python_setup() 也会做类似的事情，但显式声明更安全
+#catkin_python_setup() # 确保这一行没有被注释掉，或者添加它
+
 add_message_files(
   FILES
   PicoHand.msg
@@ -116,25 +121,23 @@ generate_messages(
   std_msgs geometry_msgs
 )
 
-install(PROGRAMS
-  src/video_udp_sender.py
-  src/pico_ros_bridge.py
-  src/hand_retargeting_algorithm_node.py
-  src/hand_data_collector.py
+catkin_install_python(PROGRAMS
+  scripts/hand_and_RGB_data_collector.py
+  scripts/hand_retargeting_algorithm_node.py
+  scripts/linkerhand_l10_controller.py
+  scripts/pico_data_provider.py
+  scripts/video_udp_sender.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-catkin_install_python(PROGRAMS
-  scripts/video_udp_sender.py
-  scripts/pico_ros_bridge.py
-  scripts/hand_retargeting_algorithm_node.py
-  scripts/hand_data_collector.py
-  scripts/hand_and_RGB_data_collector.py
-  scripts/linkerhand_l10_controller.py
-  scripts/pico_data_provider.py
-  # 如果你还有其他Python ROS节点脚本，请在此处一并列出
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
+# 在 catkin_package 宏之后，添加安装 Python 模块的指令
+# 这样你的 hand_retargeting_lib 就可以被其他 Python 脚本导入了
+# install(DIRECTORY src/hand_retargeting_lib/
+#  DESTINATION ${CATKIN_PACKAGE_PYTHON_DESTINATION}
+#  FILES_MATCHING PATTERN "*.py"
+#  PATTERN "*.pyc" EXCLUDE
+# PATTERN "__pycache__" EXCLUDE
+#  )
 
 catkin_package(
 #  INCLUDE_DIRS include

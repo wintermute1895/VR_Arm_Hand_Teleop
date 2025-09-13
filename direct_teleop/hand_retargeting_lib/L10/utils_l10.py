@@ -6,7 +6,7 @@ from scipy.spatial.transform import Rotation
 import rospy
 
 # 导入L10的专属配置
-from .left import config_l10 as config
+from . import config_l10 as config
 
 # ==============================================================================
 # 通用工具函数 (逻辑与算法设计者原始代码一致)
@@ -35,57 +35,66 @@ def translation_matrix(dx, dy, dz):
     """创建 4x4 平移矩阵"""
     return np.array([[1, 0, 0, dx], [0, 1, 0, dy], [0, 0, 1, dz], [0, 0, 0, 1]])
 
-def angles_dict_to_vector(q_dict, config_module):
+def angles_dict_to_vector(q_dict, joint_info):
     """
     将完整的关节角度字典，根据L10的耦合关系，转换为独立驱动向量。
-    (逻辑与原始代码一致)
+    [修正]：函数签名新增 joint_info 参数，并使用它获取关节信息
     """
     vec = []
-    # 使用config.FINGER_NAMES来确保只处理活动的手指
-    for finger in config.FINGER_NAMES:
-        finger_info = config.JOINT_INFO[finger]
+    # 使用传入的 joint_info 来确保左右手兼容
+    for finger in config.FINGER_NAMES: # 使用config.FINGER_NAMES来确保只处理活动的手指
+        finger_info = joint_info.get(finger, {})
         mimic_info = finger_info.get('mimic', {})
         angles_for_finger = q_dict.get(finger, [])
-        for i, joint_name in enumerate(finger_info['names']):
+        for i, joint_name in enumerate(finger_info.get('names', [])):
             if joint_name not in mimic_info:
                 if i < len(angles_for_finger):
                     vec.append(angles_for_finger[i])
                 else:
-                    vec.append(0.0) # 如果字典中缺少，则用0填充
+                    # 如果字典中缺少，则用0填充
+                    vec.append(0.0)
     return np.array(vec)
 
-def vector_to_angles_dict(q_vec, config_module):
+def vector_to_angles_dict(q_vec, joint_info):
     """
-    将独立驱动向量，根据L10的耦合关系，扩展为完整的关节角度字典。
-    (逻辑与原始代码一致)
+    将10维的独立关节向量转换回完整的手指关节字典。
+    :param q_vec: 10维独立关节向量。
+    :param joint_info: 当前手型的关节信息字典，由 HandOptimizer 传入。
     """
     q_dict = {}
     vec_idx = 0
     for finger in config.FINGER_NAMES:
-        finger_info = config.JOINT_INFO[finger]
-        num_joints = len(finger_info['names'])
+        finger_info = joint_info.get(finger, {})
+        num_joints = len(finger_info.get('names', []))
         angles = [0.0] * num_joints
         
         independent_joints_map = {}
-        for i, joint_name in enumerate(finger_info['names']):
+        for i, joint_name in enumerate(finger_info.get('names', [])):
             if joint_name not in finger_info.get('mimic', {}):
                 if vec_idx < len(q_vec):
                     raw_angle = q_vec[vec_idx]
-                    joint_limits = finger_info['limits'][i]
-                    angles[i] = np.clip(raw_angle, joint_limits[0], joint_limits[1])
+                    joint_limits = finger_info.get('limits', [])
+                    if i < len(joint_limits):
+                        angles[i] = np.clip(raw_angle, joint_limits[i][0], joint_limits[i][1])
+                    else:
+                        angles[i] = raw_angle
                     independent_joints_map[joint_name] = angles[i]
                     vec_idx += 1
         
         mimic_info = finger_info.get('mimic', {})
         for joint_name, mimic_data in mimic_info.items():
-            mimic_idx = finger_info['names'].index(joint_name)
-            master_joint_name = mimic_data['joint']
-            
-            if master_joint_name in independent_joints_map:
-                master_angle = independent_joints_map[master_joint_name]
-                calculated_angle = master_angle * mimic_data['multiplier'] + mimic_data['offset']
-                mimic_limits = finger_info['limits'][mimic_idx]
-                angles[mimic_idx] = np.clip(calculated_angle, mimic_limits[0], mimic_limits[1])
+            try:
+                mimic_idx = finger_info['names'].index(joint_name)
+                master_joint_name = mimic_data['joint']
+                
+                if master_joint_name in independent_joints_map:
+                    master_angle = independent_joints_map[master_joint_name]
+                    calculated_angle = master_angle * mimic_data['multiplier'] + mimic_data['offset']
+                    mimic_limits = finger_info['limits'][mimic_idx]
+                    angles[mimic_idx] = np.clip(calculated_angle, mimic_limits[0], mimic_limits[1])
+            except (ValueError, IndexError):
+                # 如果找不到关节名称或索引，则忽略
+                pass
 
         q_dict[finger] = angles
         
@@ -95,10 +104,11 @@ def vector_to_angles_dict(q_vec, config_module):
 # L10 专用硬件指令转换函数 (您的适配层)
 # ==============================================================================
 
-def convert_q_to_l10_command(q_dict,config_module):
+def convert_q_to_l10_command(q_dict, config_module, hand_type):
     """
     将关节角度字典 q_dict 转换为L10硬件API所需的10元素position列表 (0-255)。
     映射关系和顺序严格遵循L10 SDK文档。
+    [修正]：新增 hand_type 参数，并使用它来获取关节信息。
     """
     # SDK文档定义的10个驱动关节顺序
     sdk_joint_mapping = [
@@ -116,12 +126,16 @@ def convert_q_to_l10_command(q_dict,config_module):
 
     position_cmd = [0] * 10
     full_q_dict = q_dict
+    
+    # 动态获取当前手型的关节信息
+    joint_info = config_module.get_joint_info(hand_type)
 
     for i, (finger, joint_name) in enumerate(sdk_joint_mapping):
         try:
-            joint_idx = config_module.JOINT_INFO[finger]['names'].index(joint_name)
+            # 使用传入的 joint_info 获取正确的关节索引和角度限制
+            joint_idx = joint_info[finger]['names'].index(joint_name)
             angle_rad = full_q_dict[finger][joint_idx]
-            min_limit, max_limit = config_module.JOINT_INFO[finger]['limits'][joint_idx]
+            min_limit, max_limit = joint_info[finger]['limits'][joint_idx]
 
             if abs(max_limit - min_limit) < 1e-6:
                 normalized_value = 0.0
